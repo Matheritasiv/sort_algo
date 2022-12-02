@@ -267,44 +267,44 @@ where T: Copy + PartialOrd + 'static {
 //{{{ Smooth sort (based on binary heap)
 fn smooth_sort<T>(data: &mut [T])
 where T: Copy + PartialOrd {
-    fn heap_rectify<T>(data: &mut [T], depth: u32, flag: Option<&[bool]>)
+    fn heap_rectify<T>(mut data: &mut [T], mut depth: u32, mut flag: Option<&[bool]>)
     where T: Copy + PartialOrd {
-        let n = data.len();
-        if n <= 1 { return; }
-        let mut ind = n - 1;
-        let ind_r = ind - 1;
-        let mut delta = if depth > 0 {
-            (1usize << depth - 1) - 1
-        } else { 0 };
-        let ind_l = ind_r - delta;
-        let prev = match flag {
-            Some(flag) if ind_l >= delta && {
-                let v = data[ind_l - delta];
-                if v > data[ind] && (delta == 0 ||
-                        v > data[ind_l] && v > data[ind_r]) {
-                    data.swap(ind_l - delta, ind);
-                    true
-                } else { false }
-            } => {
-                if flag[0] {
-                    let mut result = None;
-                    for (i, &fl) in flag.into_iter().enumerate().skip(1) {
+        let mut ind;
+        let mut delta;
+        'out: loop {
+            let n = data.len();
+            if n <= 1 { return; }
+            ind = n - 1;
+            let ind_r = ind - 1;
+            delta = if depth > 0 {
+                (1usize << depth - 1) - 1
+            } else { 0 };
+            let ind_l = ind_r - delta;
+            match flag {
+                Some(flg) if ind_l >= delta && {
+                    let v = data[ind_l - delta];
+                    v > data[ind] && (delta == 0 ||
+                        v > data[ind_l] && v > data[ind_r])
+                } => if flg[0] {
+                    for (i, &fl) in flg.into_iter().enumerate().skip(1) {
                         if fl {
-                            result = Some((
-                                ind_l - delta,
-                                depth + i as u32,
-                                &flag[i ..],
-                            ));
-                            break;
+                            data.swap(ind_l - delta, ind);
+                            data = &mut data[..= ind_l - delta];
+                            depth = depth + i as u32;
+                            flag = Some(&flg[i ..]);
+                            continue 'out;
                         }
                     }
-                    result
+                    break;
                 } else {
-                    Some((ind_l - delta, depth, &flag[1 ..]))
-                }
-            },
-            _ => None,
-        };
+                    data.swap(ind_l - delta, ind);
+                    data = &mut data[..= ind_l - delta];
+                    flag = Some(&flg[1 ..]);
+                    continue;
+                },
+                _ => break,
+            }
+        }
         let v = data[ind];
         while delta > 0 {
             let mut ind_s = ind - 1;
@@ -319,9 +319,6 @@ where T: Copy + PartialOrd {
             } else { break; }
         }
         data[ind] = v;
-        if let Some((ind_prev, depth, flag)) = prev {
-            heap_rectify(&mut data[..= ind_prev], depth, Some(flag));
-        }
     }
     let n = data.len();
     let mut flag = [false; 64];
