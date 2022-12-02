@@ -4,7 +4,7 @@ Several sort algorithms in rust language:
 * quick sort
 * heap sort
 * weak heap sort
-* smooth sort
+* smooth sort (based on binary heap, not Leonardo heap)
 * bitonic sort (recursion/iteration, serial/parallel)
 
 ## License
