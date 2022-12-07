@@ -1,11 +1,97 @@
-use rand::Rng;
-use std::thread::spawn;
+mod bitonic {
+//{{{ Raw pointer wrapper
 use std::ops::Deref;
-use std::marker::Send;
-use std::cmp::PartialOrd;
-use std::time::Instant;
+struct PtrWrapper<T>(*mut T);
 
-//{{{ Bitonic sort
+impl<T> PtrWrapper<T> {
+    fn new(ptr_data: *mut T) -> Self {
+        PtrWrapper(ptr_data)
+    }
+}
+
+impl<T> Deref for PtrWrapper<T> {
+    type Target = *mut T;
+    fn deref(&self) -> &*mut T { &self.0 }
+}
+impl<T> Clone for PtrWrapper<T> {
+    fn clone(&self) -> Self { Self(self.0.clone()) }
+}
+impl<T> Copy for PtrWrapper<T> {}
+unsafe impl<T> Send for PtrWrapper<T> {}
+//}}}
+    mod recursion {
+//{{{ Bitonic sort, recursion
+fn bitonic_divide(n: usize) -> usize {
+    let (mut ind, mut n) = (1usize, n - 1 >> 1);
+    while n != 0 { n >>= 1; ind <<= 1; }
+    ind
+}
+fn bitonic_merge<T>(data: &mut [T], rev: bool)
+where T: Copy + PartialOrd {
+    if data.len() <= 1 { return; }
+    let n = data.len();
+    let ind = bitonic_divide(n);
+    {
+        let (data, data2) = data.split_at_mut(ind);
+        let data1 = &mut data[.. n - ind];
+        let (data1, data2) = if rev { (data2, data1) } else { (data1, data2) };
+        for (x, y) in data1.iter_mut().zip(data2) {
+            if *y < *x {
+                (*x, *y) = (*y, *x);
+            }
+        }
+    }
+    bitonic_merge(&mut data[.. ind], rev);
+    bitonic_merge(&mut data[ind ..], rev);
+}
+//{{{ Bitonic sort, recursion, serial
+pub fn bitonic_r_sort<T>(data: &mut [T])
+where T: Copy + PartialOrd {
+    fn bitonic_sort<T>(data: &mut [T], rev: bool)
+    where T: Copy + PartialOrd {
+        if data.len() <= 1 { return; }
+        let ind = bitonic_divide(data.len());
+        let (data1, data2) = data.split_at_mut(ind);
+        bitonic_sort(data1, !rev);
+        bitonic_sort(data2, rev);
+        bitonic_merge(data, rev);
+    }
+    bitonic_sort(data, false);
+}
+//}}}
+//{{{ Bitonic sort, recursion, parallel
+use std::thread::spawn;
+use super::PtrWrapper;
+pub fn bitonic_rp_sort<T>(data: &mut [T], t_depth: u32)
+where T: Copy + PartialOrd + 'static {
+    fn bitonic_sort<T>(count: u32, data: &mut [T], rev: bool)
+    where T: Copy + PartialOrd + 'static {
+        if data.len() <= 1 { return; }
+        let len = data.len();
+        let ind = bitonic_divide(len);
+        if count == 0 {
+            let (data1, data2) = data.split_at_mut(ind);
+            bitonic_sort(0, data1, !rev);
+            bitonic_sort(0, data2, rev);
+        } else {
+            let data = PtrWrapper::new(data.as_mut_ptr());
+            let thread1 = spawn(move || bitonic_sort(count - 1, unsafe {
+                std::slice::from_raw_parts_mut(*data, ind)
+            }, !rev));
+            let thread2 = spawn(move || bitonic_sort(count - 1, unsafe {
+                std::slice::from_raw_parts_mut(data.add(ind), len - ind)
+            }, rev));
+            thread1.join().unwrap();
+            thread2.join().unwrap();
+        }
+        bitonic_merge(data, rev);
+    }
+    bitonic_sort(t_depth, data, false);
+}
+//}}}
+//}}}
+    }
+    mod iteration {
 //{{{ Iterator `SortIndex`
 struct SortIndex {
     start          : usize,
@@ -90,116 +176,9 @@ impl Iterator for SortIndex {
     }
 }
 //}}}
-//{{{ Raw pointer wrapper
-struct PtrWrapper<T>(*mut T);
-
-impl<T> PtrWrapper<T> {
-    fn new(ptr_data: *mut T) -> Self {
-        PtrWrapper(ptr_data)
-    }
-}
-
-impl<T> Deref for PtrWrapper<T> {
-    type Target = *mut T;
-    fn deref(&self) -> &*mut T { &self.0 }
-}
-impl<T> Clone for PtrWrapper<T> {
-    fn clone(&self) -> Self { Self(self.0.clone()) }
-}
-impl<T> Copy for PtrWrapper<T> {}
-unsafe impl<T> Send for PtrWrapper<T> {}
-//}}}
-//{{{ Bitonic sort, recursion
-fn bitonic_r_sort<T>(data: &mut [T])
-where T: Copy + PartialOrd {
-    fn bitonic_divide(n: usize) -> usize {
-        let (mut ind, mut n) = (1usize, n - 1 >> 1);
-        while n != 0 { n >>= 1; ind <<= 1; }
-        ind
-    }
-    fn bitonic_merge<T>(data: &mut [T], rev: bool)
-    where T: Copy + PartialOrd {
-        if data.len() <= 1 { return; }
-        let n = data.len();
-        let ind = bitonic_divide(n);
-        {
-            let (data, data2) = data.split_at_mut(ind);
-            let data1 = &mut data[.. n - ind];
-            let (data1, data2) = if rev { (data2, data1) } else { (data1, data2) };
-            for (x, y) in data1.iter_mut().zip(data2) {
-                if *y < *x {
-                    (*x, *y) = (*y, *x);
-                }
-            }
-        }
-        bitonic_merge(&mut data[.. ind], rev);
-        bitonic_merge(&mut data[ind ..], rev);
-    }
-    fn bitonic_sort<T>(data: &mut [T], rev: bool)
-    where T: Copy + PartialOrd {
-        if data.len() <= 1 { return; }
-        let ind = bitonic_divide(data.len());
-        let (data1, data2) = data.split_at_mut(ind);
-        bitonic_sort(data1, !rev);
-        bitonic_sort(data2, rev);
-        bitonic_merge(data, rev);
-    }
-    bitonic_sort(data, false);
-}
-//}}}
-//{{{ Bitonic sort, recursion, parallel
-fn bitonic_rp_sort<T>(data: &mut [T], t_depth: u32)
-where T: Copy + PartialOrd + 'static {
-    fn bitonic_divide(n: usize) -> usize {
-        let (mut ind, mut n) = (1usize, n - 1 >> 1);
-        while n != 0 { n >>= 1; ind <<= 1; }
-        ind
-    }
-    fn bitonic_merge<T>(data: &mut [T], rev: bool)
-    where T: Copy + PartialOrd {
-        if data.len() <= 1 { return; }
-        let n = data.len();
-        let ind = bitonic_divide(n);
-        {
-            let (data, data2) = data.split_at_mut(ind);
-            let data1 = &mut data[.. n - ind];
-            let (data1, data2) = if rev { (data2, data1) } else { (data1, data2) };
-            for (x, y) in data1.iter_mut().zip(data2) {
-                if *y < *x {
-                    (*x, *y) = (*y, *x);
-                }
-            }
-        }
-        bitonic_merge(&mut data[.. ind], rev);
-        bitonic_merge(&mut data[ind ..], rev);
-    }
-    fn bitonic_sort<T>(count: u32, data: &mut [T], rev: bool)
-    where T: Copy + PartialOrd + 'static {
-        if data.len() <= 1 { return; }
-        let len = data.len();
-        let ind = bitonic_divide(len);
-        if count == 0 {
-            let (data1, data2) = data.split_at_mut(ind);
-            bitonic_sort(0, data1, !rev);
-            bitonic_sort(0, data2, rev);
-        } else {
-            let data = PtrWrapper::new(data.as_mut_ptr());
-            let thread1 = spawn(move || bitonic_sort(count - 1, unsafe {
-                std::slice::from_raw_parts_mut(*data, ind)
-            }, !rev));
-            let thread2 = spawn(move || bitonic_sort(count - 1, unsafe {
-                std::slice::from_raw_parts_mut(data.add(ind), len - ind)
-            }, rev));
-            thread1.join().unwrap();
-            thread2.join().unwrap();
-        }
-        bitonic_merge(data, rev);
-    }
-    bitonic_sort(t_depth, data, false);
-}
-//}}}
 //{{{ Bitonic sort, iteration
-fn bitonic_i_sort<T>(data: &mut [T])
+//{{{ Bitonic sort, iteration, serial
+pub fn bitonic_i_sort<T>(data: &mut [T])
 where T: Copy + PartialOrd {
     if data.len() <= 1 { return; }
     let n = data.len();
@@ -222,7 +201,9 @@ where T: Copy + PartialOrd {
 }
 //}}}
 //{{{ Bitonic sort, iteration, parallel
-fn bitonic_ip_sort<T>(data: &mut [T], t_depth: u32)
+use std::thread::spawn;
+use super::PtrWrapper;
+pub fn bitonic_ip_sort<T>(data: &mut [T], t_depth: u32)
 where T: Copy + PartialOrd + 'static {
     if data.len() <= 1 { return; }
     let n = data.len();
@@ -264,62 +245,71 @@ where T: Copy + PartialOrd + 'static {
 }
 //}}}
 //}}}
-//{{{ Smooth sort (based on binary heap)
-fn smooth_sort<T>(data: &mut [T])
-where T: Copy + PartialOrd {
-    fn heap_rectify<T>(mut data: &mut [T], mut depth: u32, mut flag: Option<&[bool]>)
-    where T: Copy + PartialOrd {
-        let mut ind;
-        let mut delta;
-        'out: loop {
-            let n = data.len();
-            if n <= 1 { return; }
-            ind = n - 1;
-            let ind_r = ind - 1;
-            delta = if depth > 0 {
-                (1usize << depth - 1) - 1
-            } else { 0 };
-            let ind_l = ind_r - delta;
-            match flag {
-                Some(flg) if ind_l >= delta && {
-                    let v = data[ind_l - delta];
-                    v > data[ind] && (delta == 0 ||
-                        v > data[ind_l] && v > data[ind_r])
-                } => if flg[0] {
-                    for (i, &fl) in flg.into_iter().enumerate().skip(1) {
-                        if fl {
-                            data.swap(ind_l - delta, ind);
-                            data = &mut data[..= ind_l - delta];
-                            depth = depth + i as u32;
-                            flag = Some(&flg[i ..]);
-                            continue 'out;
-                        }
-                    }
-                    break;
-                } else {
-                    data.swap(ind_l - delta, ind);
-                    data = &mut data[..= ind_l - delta];
-                    flag = Some(&flg[1 ..]);
-                    continue;
-                },
-                _ => break,
-            }
-        }
-        let v = data[ind];
-        while delta > 0 {
-            let mut ind_s = ind - 1;
-            let ind_l = ind_s - delta;
-            if data[ind_s] < data[ind_l] {
-                ind_s = ind_l;
-            }
-            if v < data[ind_s] {
-                data[ind] = data[ind_s];
-                ind = ind_s;
-                delta >>= 1;
-            } else { break; }
-        }
-        data[ind] = v;
     }
+    pub use recursion::bitonic_r_sort;
+    pub use recursion::bitonic_rp_sort;
+    pub use iteration::bitonic_i_sort;
+    pub use iteration::bitonic_ip_sort;
+}
+mod heap {
+    mod smooth {
+//{{{ Smooth sort (based on binary heap)
+fn heap_rectify<T>(mut data: &mut [T], mut depth: u32, mut flag: Option<&[bool]>)
+where T: Copy + PartialOrd {
+    let mut ind;
+    let mut delta;
+    'out: loop {
+        let n = data.len();
+        if n <= 1 { return; }
+        ind = n - 1;
+        let ind_r = ind - 1;
+        delta = if depth > 0 {
+            (1usize << depth - 1) - 1
+        } else { 0 };
+        let ind_l = ind_r - delta;
+        match flag {
+            Some(flg) if ind_l >= delta && {
+                let v = data[ind_l - delta];
+                v > data[ind] && (delta == 0 ||
+                    v > data[ind_l] && v > data[ind_r])
+            } => if flg[0] {
+                for (i, &fl) in flg.into_iter().enumerate().skip(1) {
+                    if fl {
+                        data.swap(ind_l - delta, ind);
+                        data = &mut data[..= ind_l - delta];
+                        depth = depth + i as u32;
+                        flag = Some(&flg[i ..]);
+                        continue 'out;
+                    }
+                }
+                break;
+            } else {
+                data.swap(ind_l - delta, ind);
+                data = &mut data[..= ind_l - delta];
+                flag = Some(&flg[1 ..]);
+                continue;
+            },
+            _ => break,
+        }
+    }
+    let v = data[ind];
+    while delta > 0 {
+        let mut ind_s = ind - 1;
+        let ind_l = ind_s - delta;
+        if data[ind_s] < data[ind_l] {
+            ind_s = ind_l;
+        }
+        if v < data[ind_s] {
+            data[ind] = data[ind_s];
+            ind = ind_s;
+            delta >>= 1;
+        } else { break; }
+    }
+    data[ind] = v;
+}
+
+pub fn smooth_sort<T>(data: &mut [T])
+where T: Copy + PartialOrd {
     let n = data.len();
     let mut flag = [false; 64];
     let mut last_bit = 0usize;
@@ -377,8 +367,10 @@ where T: Copy + PartialOrd {
     }
 }
 //}}}
+    }
+    mod weak_heap {
 //{{{ Weak heap sort
-fn weak_heap_sort<T>(data: &mut [T])
+pub fn weak_heap_sort<T>(data: &mut [T])
 where T: Copy + PartialOrd {
     if data.len() <= 1 { return; }
     let n = data.len();
@@ -417,8 +409,10 @@ where T: Copy + PartialOrd {
     data[0] = v;
 }
 //}}}
+    }
+    mod heap {
 //{{{ Heap sort
-fn heap_sort<T>(data: &mut [T])
+pub fn heap_sort<T>(data: &mut [T])
 where T: Copy + PartialOrd {
     if data.len() <= 1 { return; }
     let n = data.len();
@@ -456,8 +450,50 @@ where T: Copy + PartialOrd {
     }
 }
 //}}}
+    }
+    pub use smooth::smooth_sort;
+    pub use weak_heap::weak_heap_sort;
+    pub use heap::heap_sort;
+}
+mod bisection {
+    mod merge {
+//{{{ Merge sort
+fn merge_sorted_array<T>(v1: &mut [T], v2: &[T])
+where T: Copy + PartialOrd {
+    let mut ind_rd2 = v2.len() - 1;
+    let mut ind_rd1 = v1.len() - v2.len() - 1;
+    for ind_wr in (0 .. v1.len()).rev() {
+        if v1[ind_rd1] < v2[ind_rd2] {
+            v1[ind_wr] = v2[ind_rd2];
+            if ind_rd2 == 0 { break; }
+            ind_rd2 -= 1;
+        } else {
+            v1[ind_wr] = v1[ind_rd1];
+            if ind_rd1 == 0 {
+                for i in 0 .. ind_wr {
+                    v1[i] = v2[i];
+                }
+                break;
+            }
+            ind_rd1 -= 1;
+        }
+    }
+}
+
+pub fn merge_sort<T>(data: &mut [T])
+where T: Copy + PartialOrd {
+    if data.len() <= 1 { return; }
+    let (data1, data2) = data.split_at_mut((data.len() + 1) / 2);
+    merge_sort(data1);
+    merge_sort(data2);
+    let data2 = data2.to_vec();
+    merge_sorted_array(data, &data2);
+}
+//}}}
+    }
+    mod quick {
 //{{{ Quick sort
-fn quick_sort<T>(data: &mut [T])
+pub fn quick_sort<T>(data: &mut [T])
 where T: Copy + PartialOrd {
     if data.len() <= 1 { return; }
     let (v, n) = (data[0], data.len());
@@ -473,19 +509,49 @@ where T: Copy + PartialOrd {
     quick_sort(&mut data[ind_l ..]);
 }
 //}}}
+    }
+    pub use merge::merge_sort;
+    pub use quick::quick_sort;
+}
 
-//{{{ Main test
 fn main() {
+use rand::Rng;
+use std::time::Instant;
+    //{{{ Parse command line arguments
+    let mut len = 1000000usize;
+    let mut dproc = 2u32;
+    let mut args = std::env::args();
+    let prog = args.next().unwrap();
+    let usage = move || {
+        println!("Usage: {} <array_length={}> <thread_depth={}>", prog, len, dproc);
+    };
+    if let Some(arg) = args.next() {
+        if let Ok(arg) = arg.parse::<usize>() {
+            len = arg;
+        } else {
+            usage();
+            return;
+        }
+        if let Some(arg) = args.next() {
+            if let Ok(arg) = arg.parse::<u32>() {
+                dproc = arg;
+            } else {
+                usage();
+                return;
+            }
+        }
+    }
+    //}}}
     //{{{ Generate random integers
     let mut rng = rand::thread_rng();
     let n = i64::MAX;
-    let nums = (0 .. 1000000).map(|_| rng.gen_range(-n ..= n)).collect::<Vec<i64>>();
+    let nums = (0 .. len).map(|_| rng.gen_range(-n ..= n)).collect::<Vec<i64>>();
     //}}}
     //{{{ Quick sort
     let (elapsed_quick, result_quick) = {
         let mut nums = nums.clone();
         let now = Instant::now();
-        quick_sort(&mut nums);
+        bisection::quick_sort(&mut nums);
         (now.elapsed().as_millis(), nums)
     };
     println!("quick      : {}ms", elapsed_quick);
@@ -494,7 +560,7 @@ fn main() {
     let (elapsed_bitonic_r, result_bitonic_r) = {
         let mut nums = nums.clone();
         let now = Instant::now();
-        bitonic_r_sort(&mut nums);
+        bitonic::bitonic_r_sort(&mut nums);
         (now.elapsed().as_millis(), nums)
     };
     assert_eq!(result_quick, result_bitonic_r);
@@ -504,7 +570,7 @@ fn main() {
     let (elapsed_bitonic_rp, result_bitonic_rp) = {
         let mut nums = nums.clone();
         let now = Instant::now();
-        bitonic_rp_sort(&mut nums, 2);
+        bitonic::bitonic_rp_sort(&mut nums, dproc);
         (now.elapsed().as_millis(), nums)
     };
     assert_eq!(result_bitonic_r, result_bitonic_rp);
@@ -514,7 +580,7 @@ fn main() {
     let (elapsed_bitonic_i, result_bitonic_i) = {
         let mut nums = nums.clone();
         let now = Instant::now();
-        bitonic_i_sort(&mut nums);
+        bitonic::bitonic_i_sort(&mut nums);
         (now.elapsed().as_millis(), nums)
     };
     assert_eq!(result_bitonic_rp, result_bitonic_i);
@@ -524,7 +590,7 @@ fn main() {
     let (elapsed_bitonic_ip, result_bitonic_ip) = {
         let mut nums = nums.clone();
         let now = Instant::now();
-        bitonic_ip_sort(&mut nums, 2);
+        bitonic::bitonic_ip_sort(&mut nums, dproc);
         (now.elapsed().as_millis(), nums)
     };
     assert_eq!(result_bitonic_i, result_bitonic_ip);
@@ -534,7 +600,7 @@ fn main() {
     let (elapsed_smooth, result_smooth) = {
         let mut nums = nums.clone();
         let now = Instant::now();
-        smooth_sort(&mut nums);
+        heap::smooth_sort(&mut nums);
         (now.elapsed().as_millis(), nums)
     };
     assert_eq!(result_bitonic_ip, result_smooth);
@@ -544,7 +610,7 @@ fn main() {
     let (elapsed_weak_heap, result_weak_heap) = {
         let mut nums = nums.clone();
         let now = Instant::now();
-        weak_heap_sort(&mut nums);
+        heap::weak_heap_sort(&mut nums);
         (now.elapsed().as_millis(), nums)
     };
     assert_eq!(result_smooth, result_weak_heap);
@@ -554,11 +620,20 @@ fn main() {
     let (elapsed_heap, result_heap) = {
         let mut nums = nums.clone();
         let now = Instant::now();
-        heap_sort(&mut nums);
+        heap::heap_sort(&mut nums);
         (now.elapsed().as_millis(), nums)
     };
     assert_eq!(result_weak_heap, result_heap);
     println!("heap       : {}ms", elapsed_heap);
     //}}}
+    //{{{ Merge sort
+    let (elapsed_merge, result_merge) = {
+        let mut nums = nums.clone();
+        let now = Instant::now();
+        bisection::merge_sort(&mut nums);
+        (now.elapsed().as_millis(), nums)
+    };
+    assert_eq!(result_heap, result_merge);
+    println!("merge      : {}ms", elapsed_merge);
+    //}}}
 }
-//}}}
