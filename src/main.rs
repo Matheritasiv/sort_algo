@@ -254,64 +254,63 @@ where T: Copy + PartialOrd + 'static {
 mod heap {
     mod smooth {
 //{{{ Smooth sort (based on binary heap)
-fn heap_rectify<T>(mut data: &mut [T], mut depth: u32, mut flag: Option<&[bool]>)
+pub fn smooth_b_sort<T>(data: &mut [T])
 where T: Copy + PartialOrd {
-    let mut ind;
-    let mut delta;
-    'out: loop {
-        let n = data.len();
-        if n <= 1 { return; }
-        ind = n - 1;
-        let ind_r = ind - 1;
-        delta = if depth > 0 {
-            (1usize << depth - 1) - 1
-        } else { 0 };
-        let ind_l = ind_r - delta;
-        match flag {
-            Some(flg) if ind_l >= delta && {
-                let v = data[ind_l - delta];
-                v > data[ind] && (delta == 0 ||
-                    v > data[ind_l] && v > data[ind_r])
-            } => if flg[0] {
-                for (i, &fl) in flg.into_iter().enumerate().skip(1) {
-                    if fl {
-                        data.swap(ind_l - delta, ind);
-                        data = &mut data[..= ind_l - delta];
-                        depth = depth + i as u32;
-                        flag = Some(&flg[i ..]);
-                        continue 'out;
+    fn heap_rectify<T>(mut data: &mut [T], mut depth: u32, mut flag: Option<&[bool]>)
+    where T: Copy + PartialOrd {
+        let mut ind;
+        let mut delta;
+        'out: loop {
+            let n = data.len();
+            if n <= 1 { return; }
+            ind = n - 1;
+            let ind_r = ind - 1;
+            delta = if depth > 0 {
+                (1usize << depth - 1) - 1
+            } else { 0 };
+            let ind_l = ind_r - delta;
+            match flag {
+                Some(flg) if ind_l >= delta && {
+                    let v = data[ind_l - delta];
+                    v > data[ind] && (delta == 0 ||
+                        v > data[ind_l] && v > data[ind_r])
+                } => if flg[0] {
+                    for (i, &fl) in flg.into_iter().enumerate().skip(1) {
+                        if fl {
+                            data.swap(ind_l - delta, ind);
+                            data = &mut data[..= ind_l - delta];
+                            depth = depth + i as u32;
+                            flag = Some(&flg[i ..]);
+                            continue 'out;
+                        }
                     }
-                }
-                break;
-            } else {
-                data.swap(ind_l - delta, ind);
-                data = &mut data[..= ind_l - delta];
-                flag = Some(&flg[1 ..]);
-                continue;
-            },
-            _ => break,
+                    break;
+                } else {
+                    data.swap(ind_l - delta, ind);
+                    data = &mut data[..= ind_l - delta];
+                    flag = Some(&flg[1 ..]);
+                    continue;
+                },
+                _ => break,
+            }
         }
-    }
-    let v = data[ind];
-    while delta > 0 {
-        let mut ind_s = ind - 1;
-        let ind_l = ind_s - delta;
-        if data[ind_s] < data[ind_l] {
-            ind_s = ind_l;
+        let v = data[ind];
+        while delta > 0 {
+            let mut ind_s = ind - 1;
+            let ind_l = ind_s - delta;
+            if data[ind_s] < data[ind_l] {
+                ind_s = ind_l;
+            }
+            if v < data[ind_s] {
+                data[ind] = data[ind_s];
+                ind = ind_s;
+                delta >>= 1;
+            } else { break; }
         }
-        if v < data[ind_s] {
-            data[ind] = data[ind_s];
-            ind = ind_s;
-            delta >>= 1;
-        } else { break; }
+        data[ind] = v;
     }
-    data[ind] = v;
-}
-
-pub fn smooth_sort<T>(data: &mut [T])
-where T: Copy + PartialOrd {
     let n = data.len();
-    let mut flag = [false; 64];
+    let mut flag = [false; 1 << std::mem::size_of::<usize>()];
     let mut last_bit = 0usize;
     let mut m_bit = 0usize;
     for i in 0 .. n {
@@ -363,6 +362,112 @@ where T: Copy + PartialOrd {
             flag[1] = false;
         } else {
             flag[0] = true;
+        }
+    }
+}
+//}}}
+//{{{ Smooth sort (based on Leonardo heap)
+pub fn smooth_l_sort<T>(data: &mut [T])
+where T: Copy + PartialOrd {
+    use macro_leon::gen_leonardo_ind;
+    const LEON: &[usize] = &gen_leonardo_ind!();
+    fn heap_rectify<T>(mut data: &mut [T], mut depth: usize, mut flag: Option<&[bool]>)
+    where T: Copy + PartialOrd {
+        let mut ind;
+        'out: loop {
+            let n = data.len();
+            if n <= 1 { return; }
+            ind = n - 1;
+            let ind_r = ind - 1;
+            let (delta_r, delta_l) = if depth >= 2 {
+                (LEON[depth - 2], LEON[depth - 1])
+            } else { (0, 0) };
+            let ind_l = ind_r - delta_r;
+            match flag {
+                Some(flg) if ind_l >= delta_l && {
+                    let v = data[ind_l - delta_l];
+                    v > data[ind] && (delta_l == 0 ||
+                        v > data[ind_l] && v > data[ind_r])
+                } => {
+                    for (i, &fl) in flg.into_iter().enumerate().skip(1) {
+                        if fl {
+                            data.swap(ind_l - delta_l, ind);
+                            data = &mut data[..= ind_l - delta_l];
+                            depth = depth + i;
+                            flag = Some(&flg[i ..]);
+                            continue 'out;
+                        }
+                    }
+                    break;
+                }
+                _ => break,
+            }
+        }
+        let v = data[ind];
+        while depth >= 2 {
+            let mut ind_s = ind - 1;
+            depth -= 1;
+            let ind_l = ind_s - LEON[depth - 1];
+            if data[ind_s] < data[ind_l] {
+                ind_s = ind_l;
+            } else {
+                depth -= 1;
+            }
+            if v < data[ind_s] {
+                data[ind] = data[ind_s];
+                ind = ind_s;
+            } else { break; }
+        }
+        data[ind] = v;
+    }
+    let n = data.len();
+    let mut flag = [false; LEON.len()];
+    let mut last_bit = 2usize;
+    let mut m_bit = 0usize;
+    for i in 0 .. n {
+        if flag[last_bit + 1] {
+            (flag[last_bit], flag[last_bit + 1]) = (false, false);
+            last_bit += 2;
+        } else if last_bit >= 2 {
+            last_bit = 1;
+        } else {
+            last_bit = 0;
+        }
+        flag[last_bit] = true;
+        heap_rectify(&mut data[..= i], last_bit,
+            if last_bit > m_bit {
+                m_bit = last_bit;
+                if n - i <= LEON[m_bit - 1] + 1 {
+                    m_bit = 0;
+                    Some(&flag[last_bit ..])
+                } else { None }
+            } else if m_bit == 0 && last_bit == 0 && n - i <= 1 {
+                Some(&flag[..])
+            } else { None }
+        );
+    }
+    for i in (1 .. n).rev() {
+        if last_bit >= 2 {
+            flag[last_bit] = false;
+            last_bit -= 1;
+            flag[last_bit] = true;
+            heap_rectify(&mut data[.. i - LEON[last_bit - 1]],
+                last_bit, Some(&flag[last_bit ..]));
+            last_bit -= 1;
+            flag[last_bit] = true;
+            heap_rectify(&mut data[.. i],
+                last_bit, Some(&flag[last_bit ..]));
+        } else if last_bit != 0 {
+            for (i, &fl) in (&flag).into_iter().enumerate().skip(2) {
+                if fl {
+                    last_bit = i;
+                    break;
+                }
+            }
+            flag[1] = false;
+        } else {
+            last_bit = 1;
+            flag[0] = false;
         }
     }
 }
@@ -451,7 +556,8 @@ where T: Copy + PartialOrd {
 }
 //}}}
     }
-    pub use smooth::smooth_sort;
+    pub use smooth::smooth_b_sort;
+    pub use smooth::smooth_l_sort;
     pub use weak_heap::weak_heap_sort;
     pub use heap::heap_sort;
 }
@@ -544,8 +650,8 @@ use std::time::Instant;
     //}}}
     //{{{ Generate random integers
     let mut rng = rand::thread_rng();
-    let n = i64::MAX;
-    let nums = (0 .. len).map(|_| rng.gen_range(-n ..= n)).collect::<Vec<i64>>();
+    let n = isize::MAX;
+    let nums = (0 .. len).map(|_| rng.gen_range(-n ..= n)).collect::<Vec<isize>>();
     //}}}
     //{{{ Quick sort
     let (elapsed_quick, result_quick) = {
@@ -596,15 +702,25 @@ use std::time::Instant;
     assert_eq!(result_bitonic_i, result_bitonic_ip);
     println!("bitonic_ip : {}ms", elapsed_bitonic_ip);
     //}}}
-    //{{{ Smooth sort
-    let (elapsed_smooth, result_smooth) = {
+    //{{{ Smooth sort, binary heap
+    let (elapsed_smooth_b, result_smooth_b) = {
         let mut nums = nums.clone();
         let now = Instant::now();
-        heap::smooth_sort(&mut nums);
+        heap::smooth_b_sort(&mut nums);
         (now.elapsed().as_millis(), nums)
     };
-    assert_eq!(result_bitonic_ip, result_smooth);
-    println!("smooth     : {}ms", elapsed_smooth);
+    assert_eq!(result_bitonic_ip, result_smooth_b);
+    println!("smooth_b   : {}ms", elapsed_smooth_b);
+    //}}}
+    //{{{ Smooth sort, Leonardo heap
+    let (elapsed_smooth_l, result_smooth_l) = {
+        let mut nums = nums.clone();
+        let now = Instant::now();
+        heap::smooth_l_sort(&mut nums);
+        (now.elapsed().as_millis(), nums)
+    };
+    assert_eq!(result_smooth_b, result_smooth_l);
+    println!("smooth_l   : {}ms", elapsed_smooth_l);
     //}}}
     //{{{ Weak heap sort
     let (elapsed_weak_heap, result_weak_heap) = {
@@ -613,7 +729,7 @@ use std::time::Instant;
         heap::weak_heap_sort(&mut nums);
         (now.elapsed().as_millis(), nums)
     };
-    assert_eq!(result_smooth, result_weak_heap);
+    assert_eq!(result_smooth_l, result_weak_heap);
     println!("weak heap  : {}ms", elapsed_weak_heap);
     //}}}
     //{{{ Heap sort
