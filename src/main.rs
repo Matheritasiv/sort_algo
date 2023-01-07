@@ -421,7 +421,7 @@ where T: Copy + PartialOrd {
         data[ind] = v;
     }
     let n = data.len();
-    let mut flag = [false; LEON.len()];
+    let mut flag = [false; LEON.len() + 1];
     let mut last_bit = 2usize;
     let mut m_bit = 0usize;
     for i in 0 .. n {
